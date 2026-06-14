@@ -1,22 +1,22 @@
-import os
-import jwt
-import datetime
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session, sessionmaker
-from pydantic import BaseModel
-from typing import Optional
-from dotenv import load_dotenv
 from app.database.db import engine
 from app.database.base import Base
-from app.models.doctor import Doctor
-from app.models.patient import Patient
-from app.models.appointment import Appointment
-from app.models.department import Department
+from sqlalchemy import text
+from pydantic import BaseModel
+from typing import Optional
 
-load_dotenv()
+# ─── APP SETUP ────────────────────────────────────────────
 
-app = FastAPI()
+app = FastAPI(title="Hospital Appointment System API")
+
+# Auto-create tables on startup
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(bind=engine)
+    print("✅ Tables created on startup!")
+
+# ─── CORS ─────────────────────────────────────────────────
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,172 +26,237 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# ─── MODELS ───────────────────────────────────────────────
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+class PatientModel(BaseModel):
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    date_of_birth: Optional[str] = None
 
-SECRET_KEY     = "your-super-secret-key-change-this"
-ALGORITHM      = "HS256"
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+class DoctorModel(BaseModel):
+    name: str
+    specialization: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
 
-class LoginRequest(BaseModel):
+class AppointmentModel(BaseModel):
+    doctor_id: int
+    patient_id: int
+    appointment_date: str
+    appointment_time: str
+
+class DepartmentModel(BaseModel):
+    name: str
+
+class LoginModel(BaseModel):
     username: str
     password: str
 
-class LoginResponse(BaseModel):
-    token: str
-    message: str
+# ─── LOGIN ────────────────────────────────────────────────
 
-class DoctorCreate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    specialization: Optional[str] = None
-    department_id: Optional[int] = None
+@app.post("/login")
+def login(data: LoginModel):
+    # Simple login — you can change username/password here
+    if data.username == "admin" and data.password == "admin123":
+        return {"message": "Login successful", "token": "hospital-token-2026"}
+    raise HTTPException(status_code=401, detail="Invalid username or password")
 
-class DoctorUpdate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    specialization: Optional[str] = None
-    department_id: Optional[int] = None
-
-class PatientCreate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    gender: Optional[str] = None
-    date_of_birth: Optional[str] = None
-
-class PatientUpdate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    gender: Optional[str] = None
-    date_of_birth: Optional[str] = None
-
-class AppointmentCreate(BaseModel):
-    doctor_id: int
-    patient_id: int
-    appointment_date: Optional[str] = None
-    appointment_time: Optional[str] = None
-    status: Optional[str] = "Pending"
-    notes: Optional[str] = None
-
-class DepartmentCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-@app.post("/login", response_model=LoginResponse)
-def login(credentials: LoginRequest):
-    if credentials.username != ADMIN_USERNAME or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    payload = {
-        "sub": credentials.username,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-    }
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    return {"token": token, "message": "Login successful"}
-
-@app.get("/doctors")
-def get_doctors(db: Session = Depends(get_db)):
-    return db.query(Doctor).all()
-
-@app.post("/doctors")
-def create_doctor(data: DoctorCreate, db: Session = Depends(get_db)):
-    doctor = Doctor(**data.dict())
-    db.add(doctor)
-    db.commit()
-    db.refresh(doctor)
-    return doctor
-
-@app.put("/doctors/{doctor_id}")
-def update_doctor(doctor_id: int, data: DoctorUpdate, db: Session = Depends(get_db)):
-    doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
-    if not doctor:
-        raise HTTPException(status_code=404, detail="Doctor not found")
-    for key, value in data.dict().items():
-        setattr(doctor, key, value)
-    db.commit()
-    db.refresh(doctor)
-    return doctor
-
-@app.delete("/doctors/{doctor_id}")
-def delete_doctor(doctor_id: int, db: Session = Depends(get_db)):
-    doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
-    if not doctor:
-        raise HTTPException(status_code=404, detail="Doctor not found")
-    db.delete(doctor)
-    db.commit()
-    return {"message": "Doctor deleted"}
+# ─── PATIENTS ─────────────────────────────────────────────
 
 @app.get("/patients")
-def get_patients(db: Session = Depends(get_db)):
-    return db.query(Patient).all()
+def get_patients():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM patients"))
+            rows = result.mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/patients")
-def create_patient(data: PatientCreate, db: Session = Depends(get_db)):
-    patient = Patient(**data.dict())
-    db.add(patient)
-    db.commit()
-    db.refresh(patient)
-    return patient
+def create_patient(data: PatientModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO patients (name, phone, email, date_of_birth)
+                    VALUES (:name, :phone, :email, :date_of_birth)
+                """),
+                data.model_dump()
+            )
+        return {"message": "Patient created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/patients/{patient_id}")
-def update_patient(patient_id: int, data: PatientUpdate, db: Session = Depends(get_db)):
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    for key, value in data.dict().items():
-        setattr(patient, key, value)
-    db.commit()
-    db.refresh(patient)
-    return patient
+def update_patient(patient_id: int, data: PatientModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE patients
+                    SET name=:name, phone=:phone,
+                        email=:email, date_of_birth=:date_of_birth
+                    WHERE id=:id
+                """),
+                {**data.model_dump(), "id": patient_id}
+            )
+        return {"message": "Patient updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/patients/{patient_id}")
-def delete_patient(patient_id: int, db: Session = Depends(get_db)):
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    db.delete(patient)
-    db.commit()
-    return {"message": "Patient deleted"}
+def delete_patient(patient_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM patients WHERE id=:id"),
+                {"id": patient_id}
+            )
+        return {"message": "Patient deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/departments")
-def get_departments(db: Session = Depends(get_db)):
-    return db.query(Department).all()
+# ─── DOCTORS ──────────────────────────────────────────────
 
-@app.post("/departments")
-def create_department(data: DepartmentCreate, db: Session = Depends(get_db)):
-    dept = Department(**data.dict())
-    db.add(dept)
-    db.commit()
-    db.refresh(dept)
-    return dept
+@app.get("/doctors")
+def get_doctors():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM doctors"))
+            rows = result.mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/doctors")
+def create_doctor(data: DoctorModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO doctors (name, specialization, phone, email)
+                    VALUES (:name, :specialization, :phone, :email)
+                """),
+                data.model_dump()
+            )
+        return {"message": "Doctor created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/doctors/{doctor_id}")
+def update_doctor(doctor_id: int, data: DoctorModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE doctors
+                    SET name=:name, specialization=:specialization,
+                        phone=:phone, email=:email
+                    WHERE id=:id
+                """),
+                {**data.model_dump(), "id": doctor_id}
+            )
+        return {"message": "Doctor updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/doctors/{doctor_id}")
+def delete_doctor(doctor_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM doctors WHERE id=:id"),
+                {"id": doctor_id}
+            )
+        return {"message": "Doctor deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ─── APPOINTMENTS ─────────────────────────────────────────
 
 @app.get("/appointments")
-def get_appointments(db: Session = Depends(get_db)):
-    return db.query(Appointment).all()
+def get_appointments():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT a.id,
+                       p.name as patient_name,
+                       d.name as doctor_name,
+                       a.appointment_date,
+                       a.appointment_time,
+                       a.status
+                FROM appointments a
+                JOIN patients p ON a.patient_id = p.id
+                JOIN doctors  d ON a.doctor_id  = d.id
+            """))
+            rows = result.mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/appointments")
-def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
-    appt = Appointment(**data.dict())
-    db.add(appt)
-    db.commit()
-    db.refresh(appt)
-    return appt
+def create_appointment(data: AppointmentModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO appointments
+                    (doctor_id, patient_id, appointment_date, appointment_time, status)
+                    VALUES (:doctor_id, :patient_id, :appointment_date,
+                            :appointment_time, 'Pending')
+                """),
+                data.model_dump()
+            )
+        return {"message": "Appointment created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/appointments/{appointment_id}")
-def delete_appointment(appointment_id: int, db: Session = Depends(get_db)):
-    appt = db.query(Appointment).filter(Appointment.id == appointment_id).first()
-    if not appt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-    db.delete(appt)
-    db.commit()
-    return {"message": "Appointment deleted"}
+def delete_appointment(appointment_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM appointments WHERE id=:id"),
+                {"id": appointment_id}
+            )
+        return {"message": "Appointment deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ─── DEPARTMENTS ──────────────────────────────────────────
+
+@app.get("/departments")
+def get_departments():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM departments"))
+            rows = result.mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/departments")
+def create_department(data: DepartmentModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO departments (name) VALUES (:name)"),
+                data.model_dump()
+            )
+        return {"message": "Department created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/departments/{department_id}")
+def delete_department(department_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM departments WHERE id=:id"),
+                {"id": department_id}
+            )
+        return {"message": "Department deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
