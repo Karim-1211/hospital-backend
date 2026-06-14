@@ -3,6 +3,7 @@ import jwt
 import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.database.db import engine
 from app.database.base import Base
 from app.models.patient import Patient
@@ -16,27 +17,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── APP ───────────────────────────────────────────────────
 app = FastAPI(title="Hospital Appointment System API")
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-
-# Handle OPTIONS preflight requests
-@app.options("/{rest_of_path:path}")
-async def preflight_handler(rest_of_path: str):
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
 
 # ── CORS ─────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,13 +35,13 @@ def startup():
     Base.metadata.create_all(bind=engine)
     print("✅ All tables created successfully!")
 
-# ── AUTH CONFIG ──────────────────────────────────────────
+# ── AUTH ─────────────────────────────────────────────────
 SECRET_KEY     = os.getenv("SECRET_KEY", "hospital-secret-key-2026")
 ALGORITHM      = "HS256"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 
-# ── MODELS ───────────────────────────────────────────────
+# ── PYDANTIC MODELS ──────────────────────────────────────
 class PatientModel(BaseModel):
     name: str
     phone: Optional[str] = None
@@ -166,4 +154,81 @@ def update_doctor(doctor_id: int, data: DoctorModel):
             )
         return {"message": "Doctor updated successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500,
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/doctors/{doctor_id}")
+def delete_doctor(doctor_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM doctors WHERE id=:id"), {"id": doctor_id})
+        return {"message": "Doctor deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── APPOINTMENTS ─────────────────────────────────────────
+@app.get("/appointments")
+def get_appointments():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT a.id, p.name as patient_name, d.name as doctor_name,
+                       a.appointment_date, a.appointment_time, a.status
+                FROM appointments a
+                JOIN patients p ON a.patient_id = p.id
+                JOIN doctors d ON a.doctor_id = d.id
+            """))
+            return [dict(row) for row in result.mappings().all()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/appointments")
+def create_appointment(data: AppointmentModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO appointments (doctor_id, patient_id, appointment_date, appointment_time, status) VALUES (:doctor_id, :patient_id, :appointment_date, :appointment_time, 'Pending')"),
+                data.model_dump()
+            )
+        return {"message": "Appointment created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/appointments/{appointment_id}")
+def delete_appointment(appointment_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM appointments WHERE id=:id"), {"id": appointment_id})
+        return {"message": "Appointment deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── DEPARTMENTS ──────────────────────────────────────────
+@app.get("/departments")
+def get_departments():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM departments"))
+            return [dict(row) for row in result.mappings().all()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/departments")
+def create_department(data: DepartmentModel):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO departments (name) VALUES (:name)"),
+                data.model_dump()
+            )
+        return {"message": "Department created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/departments/{department_id}")
+def delete_department(department_id: int):
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM departments WHERE id=:id"), {"id": department_id})
+        return {"message": "Department deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
