@@ -2,29 +2,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.database.db import engine
 from app.database.base import Base
+from app.models.user import User
+from app.models.patient import Patient
+from app.models.doctor import Doctor
+from app.models.department import Department
+from app.models.appointment import Appointment
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
 
-# ─── APP SETUP ────────────────────────────────────────────
-
 app = FastAPI(title="Hospital Appointment System API")
 
-# Auto-create tables on startup
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
-    print("✅ Tables created on startup!")
-
-# ─── CORS ─────────────────────────────────────────────────
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    print("✅ All tables created successfully!")
 
 # ─── MODELS ───────────────────────────────────────────────
 
