@@ -17,6 +17,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI(title="Hospital Appointment System API")
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+# Handle OPTIONS preflight requests
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(rest_of_path: str):
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 # ── CORS ─────────────────────────────────────────────────
 app.add_middleware(
