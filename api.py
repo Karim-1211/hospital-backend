@@ -202,6 +202,18 @@ def delete_appointment(appointment_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.put("/appointments/{appointment_id}/status")
+def update_appointment_status(appointment_id: int, body: dict):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE appointments SET status=:status WHERE id=:id"),
+                {"status": body.get("status"), "id": appointment_id}
+            )
+        return {"message": "Status updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ── DEPARTMENTS ──────────────────────────────────────────
 @app.get("/departments")
 def get_departments():
